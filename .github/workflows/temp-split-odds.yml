@@ -40,7 +40,7 @@ jobs:
             "20262027"
           )
 
-          # Create all season folders
+          # Create season folders
           walk(seasons, function(season_id) {
             dir.create(
               file.path("Data", season_id),
@@ -49,13 +49,16 @@ jobs:
             )
           })
 
-          # Git does not track truly empty folders,
-          # so keep 20262027 in the repo with .gitkeep
+          # Git does not track empty folders, so preserve 20262027
           file.create(
-            file.path("Data", "20262027", ".gitkeep")
+            file.path(
+              "Data",
+              "20262027",
+              ".gitkeep"
+            )
           )
 
-          # Read full odds history
+          # Read full historical odds file
           odds <- read_parquet(
             "dkNHLodds_24-26.parquet"
           ) %>%
@@ -63,7 +66,7 @@ jobs:
               seasonId = as.character(seasonId),
 
               # Example:
-              # 2025-02-03T23 -> 2025-02-03_23
+              # 2025-10-30T04 -> 2025-10-30_04
               timestamp_folder = str_replace(
                 as.character(ts),
                 "T",
@@ -71,45 +74,53 @@ jobs:
               )
             ) %>%
             filter(
-              seasonId %in% seasons
+              seasonId %in% seasons,
+              !is.na(timestamp_folder),
+              timestamp_folder != ""
             )
 
-          message("Total rows: ", nrow(odds))
+          message("Total rows in source file: ", nrow(odds))
+
           message(
             "Seasons found: ",
-            paste(sort(unique(odds$seasonId)), collapse = ", ")
+            paste(
+              sort(unique(odds$seasonId)),
+              collapse = ", "
+            )
           )
 
+          # Use names that are different from the columns in odds
+          # so dplyr does not confuse function arguments with columns
           groups <- odds %>%
             distinct(
-              seasonId,
-              timestamp_folder
+              season_id = seasonId,
+              ts_folder = timestamp_folder
             ) %>%
             arrange(
-              seasonId,
-              timestamp_folder
+              season_id,
+              ts_folder
             )
 
           message(
-            "Timestamp groups found: ",
+            "Season/timestamp groups found: ",
             nrow(groups)
           )
 
           pwalk(
             groups,
-            function(seasonId, timestamp_folder) {
+            function(season_id, ts_folder) {
 
               timestamp_data <- odds %>%
                 filter(
-                  .data$seasonId == seasonId,
-                  .data$timestamp_folder == timestamp_folder
+                  seasonId == .env$season_id,
+                  timestamp_folder == .env$ts_folder
                 ) %>%
                 select(-timestamp_folder)
 
               output_dir <- file.path(
                 "Data",
-                seasonId,
-                timestamp_folder
+                season_id,
+                ts_folder
               )
 
               dir.create(
