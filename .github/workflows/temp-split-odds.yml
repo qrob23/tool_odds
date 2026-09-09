@@ -1,0 +1,154 @@
+name: Temp Split NHL Odds By Season And Timestamp
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  split-odds:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v5
+
+      - name: Set up R
+        uses: r-lib/actions/setup-r@v2
+
+      - name: Install R packages
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          packages: |
+            arrow
+            dplyr
+            purrr
+            stringr
+
+      - name: Split odds parquet
+        shell: Rscript {0}
+        run: |
+          library(arrow)
+          library(dplyr)
+          library(purrr)
+          library(stringr)
+
+          seasons <- c(
+            "20242025",
+            "20252026",
+            "20262027"
+          )
+
+          # Create all season folders
+          walk(seasons, function(season_id) {
+            dir.create(
+              file.path("Data", season_id),
+              recursive = TRUE,
+              showWarnings = FALSE
+            )
+          })
+
+          # Git does not track truly empty folders,
+          # so keep 20262027 in the repo with .gitkeep
+          file.create(
+            file.path("Data", "20262027", ".gitkeep")
+          )
+
+          # Read full odds history
+          odds <- read_parquet(
+            "dkNHLodds_24-26.parquet"
+          ) %>%
+            mutate(
+              seasonId = as.character(seasonId),
+
+              # Example:
+              # 2025-02-03T23 -> 2025-02-03_23
+              timestamp_folder = str_replace(
+                as.character(ts),
+                "T",
+                "_"
+              )
+            ) %>%
+            filter(
+              seasonId %in% seasons
+            )
+
+          message("Total rows: ", nrow(odds))
+          message(
+            "Seasons found: ",
+            paste(sort(unique(odds$seasonId)), collapse = ", ")
+          )
+
+          groups <- odds %>%
+            distinct(
+              seasonId,
+              timestamp_folder
+            ) %>%
+            arrange(
+              seasonId,
+              timestamp_folder
+            )
+
+          message(
+            "Timestamp groups found: ",
+            nrow(groups)
+          )
+
+          pwalk(
+            groups,
+            function(seasonId, timestamp_folder) {
+
+              timestamp_data <- odds %>%
+                filter(
+                  .data$seasonId == seasonId,
+                  .data$timestamp_folder == timestamp_folder
+                ) %>%
+                select(-timestamp_folder)
+
+              output_dir <- file.path(
+                "Data",
+                seasonId,
+                timestamp_folder
+              )
+
+              dir.create(
+                output_dir,
+                recursive = TRUE,
+                showWarnings = FALSE
+              )
+
+              output_file <- file.path(
+                output_dir,
+                "dkNHLodds.parquet"
+              )
+
+              write_parquet(
+                timestamp_data,
+                output_file,
+                compression = "zstd"
+              )
+
+              message(
+                "Wrote ",
+                nrow(timestamp_data),
+                " rows -> ",
+                output_file
+              )
+            }
+          )
+
+      - name: Commit split odds files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add Data
+          git status --short
+
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Split NHL odds by season and timestamp"
+            git push
+          fi
